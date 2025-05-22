@@ -1,0 +1,52 @@
+# ~/teslamate/traefik/traefik.yml
+
+# 로그 레벨 설정 (문제가 생기면 DEBUG로 변경하여 자세한 로그 확인)
+log:
+  level: INFO # DEBUG, INFO, WARNING, ERROR
+
+# 접속 로그 사용 설정 (기본 설정으로 사용)
+accessLog: {}
+
+# Traefik API 및 대시보드 설정
+api:
+  dashboard: true # 대시보드 활성화
+  insecure: true  # 개발/초기 설정용으로 인증 없이 대시보드 접근 허용 (:8080 포트)
+                  # 프로덕션 환경에서는 반드시 인증을 추가하거나 비활성화하세요.
+
+# EntryPoints 설정 (외부 요청을 받는 지점)
+entryPoints:
+  # HTTP 요청을 받는 entrypoint (주로 HTTPS로 리디렉션)
+  web:
+    address: ":80" # 80번 포트로 HTTP 요청 수신
+    http:
+      redirections: # HTTP -> HTTPS 리디렉션 설정
+        entryPoint:
+          to: websecure # websecure entrypoint로 리디렉션
+          scheme: https   # https 스킴 사용
+          permanent: true # 301 영구 리디렉션
+
+  # HTTPS 요청을 받는 entrypoint
+  websecure:
+    address: ":443" # 443번 포트로 HTTPS 요청 수신
+    http:
+      tls:
+        certResolver: letsencrypt # 'letsencrypt'라는 이름의 인증서 해석기 사용
+
+# Providers 설정 (서비스를 찾아내는 방법)
+providers:
+  docker:
+    watch: true # Docker 이벤트 감지 (컨테이너 시작/중지 등)
+    exposedByDefault: false # 기본적으로 모든 컨테이너를 노출하지 않음 (레이블로 개별 설정)
+    # Traefik이 연결된 Docker 서비스들을 찾을 네트워크 지정
+    # docker-compose.yml에서 Traefik과 서비스들이 연결된 'proxy' 네트워크와 일치해야 함
+    network: proxy
+
+# ========== 이 부분을 추가/수정합니다 ==========
+certificatesResolvers:
+  letsencrypt: # 해석기 이름
+    acme:
+      # email: placeholder@example.com # 이메일은 docker-compose.yml의 command에서 전달됩니다.
+      storage: "/letsencrypt/acme.json" # 컨테이너 내부의 acme.json 경로
+      httpChallenge:
+        entryPoint: web # HTTP-01 챌린지를 위한 entryPoint
+# ==========================================

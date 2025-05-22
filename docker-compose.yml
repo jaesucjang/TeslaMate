@@ -1,0 +1,131 @@
+# ~/teslamate/docker-compose.yml
+version: '3.8'
+
+services:
+  teslamate:
+    image: teslamate/teslamate:latest
+    restart: unless-stopped
+    depends_on:
+      - database
+      - mosquitto
+    environment:
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DATABASE_USER=${POSTGRES_USER}
+      - DATABASE_PASS=${POSTGRES_PASSWORD}
+      - DATABASE_NAME=${POSTGRES_DB}
+      - DATABASE_HOST=${DB_HOST}
+      - DATABASE_PORT=${DB_PORT}
+      - MQTT_HOST=${MQTT_HOST}
+      # - MQTT_USER=${MQTT_USERNAME} # .env에서 MQTT_USERNAME 설정 시 주석 해제
+      # - MQTT_PASS=${MQTT_PASSWORD} # .env에서 MQTT_PASSWORD 설정 시 주석 해제
+      - TZ=${TZ}
+      - VIRTUAL_HOST=${TESLAMATE_DOMAIN} # Deprecated, but doesn't hurt
+      - CHECK_TESLACOM_CERTIFICATE=true # Recommended
+    volumes:
+      - teslamate-data:/app/db
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.teslamate.rule=Host(`${TESLAMATE_DOMAIN}`)"
+      - "traefik.http.routers.teslamate.entrypoints=websecure"
+      - "traefik.http.routers.teslamate.tls.certresolver=letsencrypt"
+      - "traefik.http.services.teslamate.loadbalancer.server.port=4000"
+    networks: # <<< 이 부분을 확인하고 수정/추가하세요!
+      - proxy   # Traefik이 TeslaMate에 접근하기 위한 네트워크
+      - default # 데이터베이스, MQTT 등 내부 서비스와 통신하기 위한 네트워크
+
+  database:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=${TZ}
+    volumes:
+      - teslamate-db:/var/lib/postgresql/data
+    networks:
+      - default
+
+  grafana:
+    image: teslamate/grafana:latest
+    restart: unless-stopped
+    depends_on:
+      - database
+    environment:
+      - DATABASE_USER=${POSTGRES_USER}
+      - DATABASE_PASS=${POSTGRES_PASSWORD}
+      - DATABASE_NAME=${POSTGRES_DB}
+      - DATABASE_HOST=${DB_HOST}
+      - DATABASE_PORT=${DB_PORT}
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin} # 보안을 위해 변경 권장
+      - GF_SERVER_ROOT_URL=${GRAFANA_PROTOCOL}://${GRAFANA_DOMAIN}${GRAFANA_SUBPATH}
+      - GF_AUTH_PROXY_ENABLED=true
+      - GF_AUTH_PROXY_HEADER_NAME=X-Forwarded-User
+      - GF_AUTH_PROXY_HEADER_PROPERTY=username
+      - GF_AUTH_PROXY_AUTO_SIGN_UP=true
+      - TZ=${TZ}
+    volumes:
+      - teslamate-grafana-data:/var/lib/grafana
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_DOMAIN}`) && PathPrefix(`${GRAFANA_SUBPATH}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.grafana.middlewares=grafana-stripprefix"
+      - "traefik.http.middlewares.grafana-stripprefix.stripprefix.prefixes=${GRAFANA_SUBPATH}"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    networks:
+      - proxy
+      - default
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    networks:
+      - default
+
+  traefik:
+    image: traefik:v2.11
+    restart: unless-stopped
+    command:
+      - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
+#   - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+#   - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+#   - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+#   ... 기타 다른 command들 ...
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Traefik API & Dashboard (if api.insecure=true in traefik.yml)
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./traefik/letsencrypt:/letsencrypt" # Directory for acme.json
+      - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro" # Traefik static config file
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`${TESLAMATE_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      # For dashboard basic auth (recommended for security)
+      # - "traefik.http.routers.traefik-dashboard.middlewares=traefik-auth"
+      # - "traefik.http.middlewares.traefik-auth.basicauth.users=USER:HASHED_PASSWORD"
+
+volumes:
+  teslamate-data:
+  teslamate-db:
+  teslamate-grafana-data:
+  mosquitto-data:
+  mosquitto-log:
+
+networks:
+  proxy:
+    external: true
+  default:
+    driver: bridge
